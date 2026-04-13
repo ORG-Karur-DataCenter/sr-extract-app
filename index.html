@@ -762,7 +762,7 @@ async function extractSinglePdf(file, prompt, key, model){
           updateProgress(`🔄 Rate limited — rotated to key ${S.currentKeyIndex+1}/${totalKeys}`, null, `Retrying ${file.name}…`, null);
           await sleep(2000);
         } else {
-          const wait = r.status===429 ? 15 : 20;
+          const wait = r.status===429 ? 15 : 4;
           for(let s=wait;s>0;s--){
             updateProgress(`⏳ ${errMsg.slice(0,50)} — retrying in ${s}s...`, null, `Attempt ${attempt} for ${file.name}`, null);
             await sleep(1000);
