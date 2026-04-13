@@ -294,7 +294,15 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
       <button class="btn btn-primary btn-lg" id="run-btn">🤖 Run Extraction</button>
       <button class="btn btn-ghost" id="abort-btn" style="display:none">⛔ Abort</button>
     </div>
-    <div style="margin-top:8px;font-size:11.5px;color:var(--text-3)">Each PDF is uploaded to Gemini individually. Extraction takes ~10-15 seconds per study.</div>
+    <div id="live-stats" style="margin-top:10px;display:none;font-size:12px;color:var(--text-2);background:var(--surface-2);border-radius:8px;padding:10px 14px">
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <span>⏱️ Elapsed: <strong id="st-elapsed">0s</strong></span>
+        <span>⚡ Avg/study: <strong id="st-avg">—</strong></span>
+        <span>✅ Success: <strong id="st-ok">0</strong></span>
+        <span>❌ Failed: <strong id="st-fail">0</strong></span>
+        <span>🔑 Key: <strong id="st-key">1</strong></span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -360,6 +368,7 @@ const S = {
   isRunning: false,
   aborted: false,
   currentKeyIndex: 0, // For key rotation
+  activeFile: null,   // Currently processing file name
 };
 
 // ── LOCAL STORAGE ─────────────────────────────────────────
@@ -611,8 +620,9 @@ function renderPdfList(){
     const sz=(f.size/1024).toFixed(0);
     const extracted=S.results.find(r=>r['Source File']===f.name);
     const failed=S.failures.find(r=>r.file===f.name);
-    const st=extracted?'done':failed?'fail':'pending';
-    const stText=extracted?'✅ Done':failed?'❌ Failed':'⏳ Pending';
+    const isActive=S.activeFile===f.name;
+    const st=extracted?'done':failed?'fail':isActive?'active':'pending';
+    const stText=extracted?'✅ Done':failed?'❌ Failed':isActive?'🔄 Extracting…':'📎 Ready';
     return `<div class="file-item"><span style="font-size:16px">📄</span><span class="name">${f.name}</span><span class="size">${sz} KB</span><span class="status ${st}">${stText}</span></div>`;
   }).join('');
 }
@@ -623,7 +633,7 @@ function renderPdfList(){
 // ══════════════════════════════════════════════════════════
 async function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 10; // High retry count — overload/rate errors retry forever below
 
 async function uploadFileToGemini(file, key){
   console.log(`[API] Uploading file: ${file.name} (${(file.size/1024).toFixed(0)} KB)`);
@@ -635,7 +645,6 @@ async function uploadFileToGemini(file, key){
   for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
   const base64 = btoa(binary);
   
-  // Use the inline data approach instead of Files API (simpler, no upload step)
   return {
     inlineData: {
       mimeType: 'application/pdf',
@@ -678,17 +687,29 @@ function cleanJsonString(text){
   return t.trim();
 }
 
+function isRetryableError(status, msg){
+  if(status===429||status===503||status===500) return true;
+  const lm=msg.toLowerCase();
+  if(lm.includes('resource_exhausted')||lm.includes('overloaded')||lm.includes('high demand')||lm.includes('capacity')||lm.includes('temporarily')) return true;
+  return false;
+}
+
 async function extractSinglePdf(file, prompt, key, model){
-  for(let attempt=1; attempt<=MAX_RETRIES; attempt++){
+  let attempt=0;
+  let rateLimitHits=0; // Track consecutive rate-limit hits
+  const totalKeys=getKeys().length;
+  
+  while(true){
+    attempt++;
     if(S.aborted) throw new Error('Aborted');
     try{
-      console.log(`[API] Extracting ${file.name} — attempt ${attempt}/${MAX_RETRIES}`);
+      console.log(`[API] Extracting ${file.name} — attempt ${attempt}`);
+      updateProgress(`📄 Extracting: ${file.name}`, null, `Attempt ${attempt}…`, null);
       
-      // Prepare inline PDF data
       const pdfPart = await uploadFileToGemini(file, key);
-      
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-      console.log(`[API] POST ${url.replace(key,'***')}`);
+      const currentKey = getKey(); // Get current rotated key
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
+      console.log(`[API] POST ${url.replace(currentKey,'***')}`);
       
       const r = await fetch(url, {
         method: 'POST',
@@ -702,27 +723,19 @@ async function extractSinglePdf(file, prompt, key, model){
       console.log(`[API] Response status: ${r.status} ${r.statusText}`);
       
       if(r.ok){
+        rateLimitHits=0; // Reset on success
         const d = await r.json();
         const text = d.candidates?.[0]?.content?.parts?.[0]?.text;
         console.log(`[API] Success! Response length: ${(text||'').length} chars`);
-        
         if(!text) throw new Error('Empty response from model');
-        
         const cleaned = cleanJsonString(text);
         let data = JSON.parse(cleaned);
-        
-        // Handle array response
         if(Array.isArray(data)){
           data = data.length>0 ? data[0] : null;
           if(!data) throw new Error('Empty array returned');
         }
-        
-        // Validate: must have some real content
         const realFields = Object.entries(data).filter(([k,v])=>v!==null&&String(v).trim());
-        if(realFields.length<2){
-          throw new Error(`Only ${realFields.length} non-null fields extracted`);
-        }
-        
+        if(realFields.length<2) throw new Error(`Only ${realFields.length} non-null fields extracted`);
         data['Source File'] = file.name;
         return {data, error: null};
       }
@@ -732,30 +745,48 @@ async function extractSinglePdf(file, prompt, key, model){
       console.error(`[API] Error ${r.status}:`, errMsg);
       console.error('[API] Full error:', JSON.stringify(e, null, 2));
       
-      if(r.status===429 || errMsg.includes('RESOURCE_EXHAUSTED')){
-        if(rotateKey()){
-          console.log('[API] Rate limited — rotated key, retrying immediately...');
-        } else {
-          console.log('[API] Rate limited — all keys exhausted, waiting 15s...');
-          toast(`Rate limited. Waiting 15s... (${file.name})`, 'warning', 16000);
-          await sleep(15000);
+      if(isRetryableError(r.status, errMsg)){
+        rateLimitHits++;
+        const fullCycles = Math.floor(rateLimitHits / Math.max(totalKeys, 1));
+        
+        // After 2 full key rotation cycles, show exhaustion warning
+        if(fullCycles >= 2){
+          toast('⚠️ All API keys exhausted over 2 cycles. Consider adding fresh API keys or upgrading your Google AI plan at aistudio.google.com', 'error', 15000);
+          updateProgress(`⚠️ Keys exhausted — waiting 60s for quota reset...`, null, `All ${totalKeys} key(s) rate-limited. Add fresh keys or upgrade plan.`, null);
+          await sleep(60000);
+          rateLimitHits = 0; // Reset after long wait
+          continue;
         }
-      } else {
-        toast(`Error: ${errMsg.slice(0,80)}`, 'warning', 5000);
-        await sleep(5000);
+        
+        if(r.status===429 && rotateKey()){
+          updateProgress(`🔄 Rate limited — rotated to key ${S.currentKeyIndex+1}/${totalKeys}`, null, `Retrying ${file.name}…`, null);
+          await sleep(2000);
+        } else {
+          const wait = r.status===429 ? 15 : 20;
+          for(let s=wait;s>0;s--){
+            updateProgress(`⏳ ${errMsg.slice(0,50)} — retrying in ${s}s...`, null, `Attempt ${attempt} for ${file.name}`, null);
+            await sleep(1000);
+          }
+        }
+        continue;
       }
+      
+      // Non-retryable API error
+      if(attempt >= MAX_RETRIES) return {data:null, error: errMsg};
+      await sleep(5000);
+      
     }catch(err){
       console.error(`[API] Exception on attempt ${attempt}:`, err.message);
       if(err.message==='Aborted') throw err;
       if(err instanceof SyntaxError){
-        // JSON parse error
-        return {data:null, error:`Invalid JSON response`};
+        if(attempt >= 3) return {data:null, error:'Invalid JSON response after 3 tries'};
+        await sleep(5000);
+        continue;
       }
-      if(attempt>=MAX_RETRIES) return {data:null, error:err.message};
+      if(attempt >= MAX_RETRIES) return {data:null, error:err.message};
       await sleep(5000);
     }
   }
-  return {data:null, error:'All retries exhausted'};
 }
 
 // ══════════════════════════════════════════════════════════
@@ -798,18 +829,37 @@ async function runExtraction(){
   
   const total=toProcess.length;
   let done=0;
+  const startTime=Date.now();
+  
+  // Show live stats panel
+  const liveStats=document.getElementById('live-stats');
+  if(liveStats)liveStats.style.display='block';
+  
+  // Live stats updater
+  const statsTimer=setInterval(()=>{
+    const elapsed=Math.floor((Date.now()-startTime)/1000);
+    const mins=Math.floor(elapsed/60);
+    const secs=elapsed%60;
+    const el=document.getElementById('st-elapsed');if(el)el.textContent=mins>0?`${mins}m ${secs}s`:`${secs}s`;
+    const avg=document.getElementById('st-avg');if(avg)avg.textContent=done>0?`${(elapsed/done).toFixed(1)}s`:'—';
+    const ok=document.getElementById('st-ok');if(ok)ok.textContent=done;
+    const fl=document.getElementById('st-fail');if(fl)fl.textContent=S.failures.length;
+    const ky=document.getElementById('st-key');if(ky)ky.textContent=`${S.currentKeyIndex+1}/${getKeys().length||1}`;
+  },1000);
   
   try{
     for(let i=0;i<total;i++){
       if(S.aborted) throw new Error('Aborted');
       
       const file=toProcess[i];
+      S.activeFile=file.name;
       const pct=Math.round((i/total)*100);
       updateProgress(`📄 Extracting: ${file.name}`, pct, `Processing study ${i+1} of ${total}…`, `${i} / ${total}`);
       renderPdfList();
       
       const {data, error} = await extractSinglePdf(file, prompt, getKey(), model);
       
+      S.activeFile=null;
       if(data){
         S.results.push(data);
         done++;
@@ -838,10 +888,13 @@ async function runExtraction(){
       console.error(err);
     }
   }finally{
+    clearInterval(statsTimer);
     S.isRunning=false;
+    S.activeFile=null;
     if(runBtn){runBtn.disabled=false;runBtn.innerHTML='🤖 Run Extraction'}
     if(abortBtn)abortBtn.style.display='none';
     if(pw)setTimeout(()=>pw.classList.remove('visible'),5000);
+    renderPdfList();
     renderResults();
     updateDashboard();
   }
@@ -852,10 +905,10 @@ function updateProgress(lbl,pct,status,detail){
   const le=document.getElementById('progress-label');
   const pl=document.getElementById('prog-left');
   const pr=document.getElementById('prog-right');
-  if(fe)fe.style.width=pct+'%';
-  if(le)le.textContent=lbl;
-  if(pl)pl.textContent=status||'';
-  if(pr)pr.textContent=detail||'';
+  if(fe&&pct!==null)fe.style.width=pct+'%';
+  if(le&&lbl!==null)le.textContent=lbl;
+  if(pl&&status!==null)pl.textContent=status;
+  if(pr&&detail!==null)pr.textContent=detail;
 }
 
 // ══════════════════════════════════════════════════════════
