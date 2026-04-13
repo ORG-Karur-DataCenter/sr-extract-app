@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SR Extraction Agent — Structured Data Extraction</title>
+<meta name="description" content="AI-powered structured data extraction from scientific PDFs for systematic reviews. Browser-based, no installation required.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- SheetJS for XLSX export -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#0a0e1a;--surface:#111827;--surface-2:#1a2236;--surface-3:#232d45;
+  --border:#2a3555;--border-2:#3a4a6b;
+  --text:#e8ecf4;--text-2:#a0aec0;--text-3:#6b7c99;
+  --primary:#7c3aed;--primary-2:#6d28d9;--primary-glow:rgba(124,58,237,.15);
+  --green:#22c55e;--green-bg:rgba(34,197,94,.12);
+  --red:#ef4444;--red-bg:rgba(239,68,68,.12);
+  --amber:#f59e0b;--amber-bg:rgba(245,158,11,.12);
+  --cyan:#06b6d4;--cyan-bg:rgba(6,182,212,.12);
+  --radius:10px;--radius-lg:14px;
+  font-family:'Inter',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);min-height:100vh;display:flex}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:3px}
+
+/* Layout */
+.sidebar{width:230px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;z-index:100;overflow-y:auto}
+.main{margin-left:230px;flex:1;min-height:100vh;padding:28px 36px 40px}
+.logo{padding:22px 20px 10px;display:flex;align-items:center;gap:11px}
+.logo-icon{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--primary),var(--cyan));display:flex;align-items:center;justify-content:center;font-size:18px}
+.logo-text{font-weight:700;font-size:15px;line-height:1.2}
+.logo-sub{font-size:11px;color:var(--text-3);font-weight:400}
+.nav{margin-top:12px;padding:0 10px;flex:1}
+.nav-section{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-3);padding:14px 10px 5px;font-weight:600}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--radius);cursor:pointer;font-size:13.5px;color:var(--text-2);transition:.15s;margin-bottom:2px;border-left:3px solid transparent}
+.nav-item:hover{background:var(--primary-glow);color:var(--text)}
+.nav-item.active{background:var(--primary-glow);color:var(--text);border-left-color:var(--primary);font-weight:600}
+.nav-item .badge{margin-left:auto;background:var(--primary);color:#fff;font-size:10.5px;padding:1px 7px;border-radius:10px;font-weight:600}
+.api-status{padding:14px 20px;border-top:1px solid var(--border)}
+.api-dot{width:8px;height:8px;border-radius:50%;background:var(--red);display:inline-block;margin-right:6px}
+.api-dot.ok{background:var(--green)}
+#api-label{font-size:11.5px;color:var(--text-3)}
+
+/* Page header */
+.page-header{margin-bottom:24px}
+.page-header h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.page-header p{color:var(--text-3);font-size:13.5px}
+
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:22px;margin-bottom:18px}
+.card-title{font-weight:600;font-size:14.5px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+
+/* Inputs */
+.input{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 13px;color:var(--text);font-size:13px;width:100%;font-family:inherit;outline:none;transition:.2s}
+.input:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-glow)}
+.input-label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:1px;color:var(--text-3);margin-bottom:5px;font-weight:600}
+.input-group{margin-bottom:14px}
+select.input{cursor:pointer}
+textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospace;font-size:12px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:.2s;font-family:inherit}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-2)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-ghost{background:transparent;color:var(--text-2);border:1px solid var(--border)}.btn-ghost:hover{border-color:var(--text-2)}
+.btn-danger{background:var(--red-bg);color:var(--red);border:1px solid transparent}.btn-danger:hover{background:var(--red)}
+.btn-sm{padding:6px 12px;font-size:12px}
+.btn-lg{padding:11px 24px;font-size:14px}
+.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Progress */
+.progress-wrap{display:none;margin-bottom:14px}
+.progress-wrap.visible{display:block}
+.progress-label{font-size:13px;font-weight:600;margin-bottom:6px}
+.progress-track{height:8px;background:var(--surface-3);border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--primary),var(--cyan));border-radius:4px;transition:width .4s ease;width:0%}
+.progress-stats{display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-3);margin-top:5px}
+
+/* Toasts */
+#toasts{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{padding:11px 18px;border-radius:var(--radius);font-size:13px;animation:slideIn .25s ease;max-width:420px;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.toast.info{background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb}
+.toast.success{background:#14532d;color:#86efac;border:1px solid #22c55e}
+.toast.error{background:#450a0a;color:#fca5a5;border:1px solid #ef4444}
+.toast.warning{background:#451a03;color:#fcd34d;border:1px solid #f59e0b}
+.toast-exit{animation:slideOut .25s ease forwards}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideOut{from{opacity:1}to{transform:translateX(100%);opacity:0}}
+
+/* Tabs */
+.tab-panel{display:none}.tab-panel.active{display:block}
+
+/* Stat cards */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;text-align:center}
+.stat-val{font-size:28px;font-weight:700}
+.stat-label{font-size:11.5px;color:var(--text-3);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
+
+/* Upload area */
+.upload-zone{border:2px dashed var(--border-2);border-radius:var(--radius-lg);padding:40px 20px;text-align:center;cursor:pointer;transition:.2s;background:var(--surface-2)}
+.upload-zone:hover,.upload-zone.drag-over{border-color:var(--primary);background:var(--primary-glow)}
+.upload-zone .icon{font-size:36px;margin-bottom:8px}
+.upload-zone .label{font-size:14px;font-weight:600;margin-bottom:4px}
+.upload-zone .hint{font-size:12px;color:var(--text-3)}
+
+/* Spreadsheet grid */
+.grid-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2)}
+.grid-table{width:100%;border-collapse:collapse;font-size:13px}
+.grid-table th{padding:8px 12px;background:var(--surface-3);border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);text-align:left;position:sticky;top:0}
+.grid-table td{padding:2px}
+.grid-table td input{width:100%;background:transparent;border:none;padding:7px 10px;color:var(--text);font-size:13px;font-family:inherit;outline:none}
+.grid-table td input:focus{background:var(--primary-glow)}
+.grid-table tr:nth-child(even){background:rgba(255,255,255,.02)}
+.grid-table tr:hover{background:rgba(124,58,237,.06)}
+.grid-table td.row-num{width:36px;text-align:center;color:var(--text-3);font-size:11px;padding:0 4px;cursor:default}
+.grid-table td.del-cell{width:30px;text-align:center}
+.grid-table td.del-cell button{background:none;border:none;color:var(--text-3);cursor:pointer;font-size:14px;padding:4px}
+.grid-table td.del-cell button:hover{color:var(--red)}
+
+/* Results table */
+.results-table{width:100%;border-collapse:collapse;font-size:12px}
+.results-table th{padding:8px 10px;background:var(--surface-3);border:1px solid var(--border);font-size:11px;text-transform:uppercase;color:var(--text-3);text-align:left;position:sticky;top:0;white-space:nowrap}
+.results-table td{padding:7px 10px;border:1px solid var(--border);max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.results-table tr:nth-child(even){background:rgba(255,255,255,.02)}
+.results-table tr:hover{background:rgba(124,58,237,.06)}
+.results-table td.full{white-space:normal;word-break:break-word}
+
+/* Empty state */
+.empty{text-align:center;padding:48px 20px;color:var(--text-3)}
+.empty-icon{font-size:42px;margin-bottom:8px}
+.empty-title{font-size:16px;font-weight:600;margin-bottom:4px;color:var(--text-2)}
+.empty-text{font-size:13px}
+
+/* File list */
+.file-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto}
+.file-item{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface-2);border-radius:8px;font-size:12.5px}
+.file-item .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-item .size{color:var(--text-3);font-size:11px}
+.file-item .status{font-size:11px;font-weight:600}
+.file-item .status.done{color:var(--green)}
+.file-item .status.fail{color:var(--red)}
+.file-item .status.pending{color:var(--text-3)}
+.file-item .status.active{color:var(--cyan)}
+
+.flex-end{display:flex;justify-content:flex-end}
+.mb-8{margin-bottom:8px}.mb-16{margin-bottom:16px}
+.gap-8{gap:8px}.gap-10{gap:10px}
+.paste-hint{font-size:11.5px;color:var(--text-3);margin-top:6px}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">📊</div>
+    <div>
+      <div class="logo-text">SR Extraction Agent</div>
+      <div class="logo-sub">Structured Data Extraction</div>
+    </div>
+  </div>
+  <div class="nav">
+    <div class="nav-section">Workspace</div>
+    <div class="nav-item active" data-tab="dashboard">📋 Dashboard</div>
+    <div class="nav-item" data-tab="template">📝 Template</div>
+    <div class="nav-item" data-tab="upload">🚀 Upload & Extract</div>
+    <div class="nav-section">Output</div>
+    <div class="nav-item" data-tab="results">📊 Results <span class="badge" id="results-badge">0</span></div>
+    <div class="nav-section">Config</div>
+    <div class="nav-item" data-tab="settings">⚙️ Settings</div>
+  </div>
+  <div class="api-status">
+    <span class="api-dot" id="api-dot"></span>
+    <span id="api-label">No API Key</span>
+  </div>
+</nav>
+
+<!-- Main Content -->
+<div class="main">
+<div id="toasts"></div>
+
+<!-- ── DASHBOARD ──────────────────────────────── -->
+<div class="tab-panel active" id="tab-dashboard">
+  <div class="page-header"><h1>Overview Dashboard</h1><p>Extraction pipeline status at a glance.</p></div>
+  <div class="stat-row">
+    <div class="stat-card"><div class="stat-val" id="stat-fields">0</div><div class="stat-label">Template Fields</div></div>
+    <div class="stat-card"><div class="stat-val" id="stat-pdfs">0</div><div class="stat-label">PDFs Uploaded</div></div>
+    <div class="stat-card"><div class="stat-val" id="stat-extracted">0</div><div class="stat-label">Extracted</div></div>
+    <div class="stat-card"><div class="stat-val" id="stat-failed">0</div><div class="stat-label">Failed</div></div>
+  </div>
+  <div class="card">
+    <div class="card-title">🧭 How It Works</div>
+    <ol style="font-size:13.5px;line-height:1.9;color:var(--text-2);padding-left:20px">
+      <li><strong>Template</strong> — Define your extraction fields (paste from Excel or upload .docx/.xlsx)</li>
+      <li><strong>Upload PDFs</strong> — Drop your included study PDFs</li>
+      <li><strong>Extract</strong> — Each PDF is uploaded to Gemini, which reads and extracts structured data</li>
+      <li><strong>Results</strong> — View, filter, and export your extraction table as XLSX or CSV</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ── TEMPLATE ──────────────────────────────── -->
+<div class="tab-panel" id="tab-template">
+  <div class="page-header"><h1>Extraction Template</h1><p>Define the fields you want extracted from each study.</p></div>
+  
+  <div class="card">
+    <div class="card-title">📋 Paste or Type Fields</div>
+    <p style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">
+      Paste rows directly from Excel/Google Sheets (columns: <strong>Field Name</strong>, <strong>Description</strong>, <strong>Section</strong>), or type them manually below.
+    </p>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="paste-from-clipboard-btn">📋 Paste from Clipboard</button>
+      <button class="btn btn-ghost btn-sm" id="add-row-btn">+ Add Row</button>
+      <button class="btn btn-ghost btn-sm" id="add-5-rows-btn">+ Add 5 Rows</button>
+      <button class="btn btn-danger btn-sm" id="clear-grid-btn">Clear All</button>
+    </div>
+    <div class="grid-wrap" style="max-height:400px;overflow-y:auto">
+      <table class="grid-table" id="template-grid">
+        <thead><tr><th style="width:36px">#</th><th>Field Name</th><th>Description (optional)</th><th>Section (optional)</th><th style="width:30px"></th></tr></thead>
+        <tbody id="grid-body"></tbody>
+      </table>
+    </div>
+    <div class="paste-hint">💡 Tip: Copy columns from Excel → click "Paste from Clipboard" → fields auto-populate.</div>
+    <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" id="save-template-btn">💾 Save Template</button>
+      <span style="color:var(--text-3);font-size:12px;align-self:center" id="template-status"></span>
+    </div>
+  </div>
+  
+  <div class="card">
+    <div class="card-title">📁 Or Upload Template File</div>
+    <div class="upload-zone" id="template-drop">
+      <div class="icon">📄</div>
+      <div class="label">Drop .docx or .xlsx template here</div>
+      <div class="hint">or click to browse</div>
+      <input type="file" id="template-file-input" accept=".docx,.xlsx,.xls" style="display:none">
+    </div>
+  </div>
+</div>
+
+<!-- ── UPLOAD & EXTRACT ──────────────────────── -->
+<div class="tab-panel" id="tab-upload">
+  <div class="page-header"><h1>Upload & Extract</h1><p>Upload study PDFs and run AI-powered extraction.</p></div>
+  
+  <div class="card">
+    <div class="card-title">🔑 API Configuration</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="input-group" style="flex:1;min-width:280px">
+        <label class="input-label">Gemini API Key</label>
+        <input class="input" type="password" id="api-key-input" placeholder="AIza...">
+      </div>
+      <div class="input-group" style="min-width:190px;max-width:220px">
+        <label class="input-label">Model</label>
+        <select class="input" id="model-select">
+          <option value="gemini-2.5-flash">gemini-2.5-flash ✅ Recommended</option>
+          <option value="gemini-2.5-pro">gemini-2.5-pro (Best Quality)</option>
+          <option value="gemini-2.0-flash">gemini-2.0-flash (Fast)</option>
+          <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (Fastest)</option>
+        </select>
+      </div>
+      <button class="btn btn-ghost" id="save-key-btn" style="margin-bottom:14px">Save</button>
+    </div>
+  </div>
+  
+  <div class="card">
+    <div class="card-title">📁 Upload PDFs</div>
+    <div class="upload-zone" id="pdf-drop">
+      <div class="icon">📄</div>
+      <div class="label">Drop PDF files here</div>
+      <div class="hint">or click to browse · supports multiple files</div>
+      <input type="file" id="pdf-file-input" accept=".pdf" multiple style="display:none">
+    </div>
+    <div class="file-list" id="pdf-list" style="margin-top:12px"></div>
+  </div>
+  
+  <div class="card">
+    <div class="card-title">▶️ Run Extraction</div>
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-label" id="progress-label">Initializing…</div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-stats">
+        <span id="prog-left">Preparing…</span>
+        <span id="prog-right"></span>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn btn-primary btn-lg" id="run-btn">🤖 Run Extraction</button>
+      <button class="btn btn-ghost" id="abort-btn" style="display:none">⛔ Abort</button>
+    </div>
+    <div style="margin-top:8px;font-size:11.5px;color:var(--text-3)">Each PDF is uploaded to Gemini individually. Extraction takes ~10-15 seconds per study.</div>
+  </div>
+</div>
+
+<!-- ── RESULTS ──────────────────────────────── -->
+<div class="tab-panel" id="tab-results">
+  <div class="page-header"><h1>Extraction Results</h1><p>Structured data extracted from your studies.</p></div>
+  <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    <button class="btn btn-primary btn-sm" id="dl-xlsx-btn" disabled>📥 Download XLSX</button>
+    <button class="btn btn-ghost btn-sm" id="dl-csv-btn" disabled>📥 Download CSV</button>
+  </div>
+  <div id="results-content">
+    <div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No results yet</div><div class="empty-text">Run an extraction to see results here.</div></div>
+  </div>
+</div>
+
+<!-- ── SETTINGS ──────────────────────────────── -->
+<div class="tab-panel" id="tab-settings">
+  <div class="page-header"><h1>Settings</h1><p>Configure API key and extraction preferences.</p></div>
+  <div class="card">
+    <div class="card-title">🔑 Gemini API Key</div>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div class="input-group" style="flex:1">
+        <label class="input-label">API Key</label>
+        <input class="input" type="password" id="settings-api-key" placeholder="AIza...">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Default Model</label>
+        <select class="input" id="settings-model">
+          <option value="gemini-2.5-flash">gemini-2.5-flash ✅ Recommended</option>
+          <option value="gemini-2.5-pro">gemini-2.5-pro (Best Quality)</option>
+          <option value="gemini-2.0-flash">gemini-2.0-flash (Fast)</option>
+          <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (Fastest)</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button class="btn btn-primary" id="settings-save-btn">Save Settings</button>
+      <button class="btn btn-danger" id="settings-clear-btn">Clear Key</button>
+    </div>
+    <p style="margin-top:8px;font-size:11.5px;color:var(--text-3)">API key is stored only in your browser's localStorage. Get a free key at <a href="https://aistudio.google.com" target="_blank" style="color:var(--cyan)">aistudio.google.com</a>.</p>
+  </div>
+  <div class="card">
+    <div class="card-title">🗑️ Data Management</div>
+    <button class="btn btn-danger" id="clear-results-btn">Clear All Results</button>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   SR Extraction Agent — Browser Interface
+   Mirrors gemini_api_extractor.py pipeline
+   © ORG-Karur-DataCenter
+══════════════════════════════════════════════════════════ */
+
+// ── STATE ─────────────────────────────────────────────────
+const S = {
+  templateFields: [], // [{name, description, section}]
+  pdfFiles: [],       // File objects
+  results: [],        // [{field: value, ...}]
+  failures: [],       // [{file, error}]
+  isRunning: false,
+  aborted: false,
+};
+
+// ── LOCAL STORAGE ─────────────────────────────────────────
+const LS={
+  get:(k,d=null)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}},
+  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
+  del:(k)=>{try{localStorage.removeItem(k)}catch{}}
+};
+const getKey=()=>LS.get('ex_key','');
+const setKey=(v)=>LS.set('ex_key',v);
+const getModel=()=>{
+  const validModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
+  const m = LS.get('ex_model','gemini-2.5-flash');
+  return validModels.includes(m) ? m : 'gemini-2.5-flash';
+};
+const setModel=(v)=>LS.set('ex_model',v);
+
+// ── TOASTS ─────────────────────────────────────────────────
+function toast(msg,type='info',ms=4000){
+  const c=document.getElementById('toasts');
+  const el=document.createElement('div');
+  el.className=`toast ${type}`;el.textContent=msg;
+  c.appendChild(el);
+  setTimeout(()=>{el.classList.add('toast-exit');el.addEventListener('animationend',()=>el.remove())},ms);
+  el.addEventListener('click',()=>{el.classList.add('toast-exit');el.addEventListener('animationend',()=>el.remove())});
+}
+
+// ── TAB NAV ────────────────────────────────────────────────
+const TABS=['dashboard','template','upload','results','settings'];
+function switchTab(id){
+  TABS.forEach(t=>{
+    const p=document.getElementById('tab-'+t);if(p)p.classList.toggle('active',t===id);
+    document.querySelectorAll(`.nav-item[data-tab="${t}"]`).forEach(n=>n.classList.toggle('active',t===id));
+  });
+}
+document.querySelectorAll('.nav-item[data-tab]').forEach(n=>n.addEventListener('click',()=>switchTab(n.dataset.tab)));
+
+// ── API STATUS ─────────────────────────────────────────────
+function updateApiStatus(){
+  const ok=!!getKey();
+  const dot=document.getElementById('api-dot');
+  const lbl=document.getElementById('api-label');
+  if(dot)dot.className='api-dot'+(ok?' ok':'');
+  if(lbl)lbl.textContent=ok?'API Connected':'No API Key';
+}
+
+// ══════════════════════════════════════════════════════════
+// TEMPLATE SPREADSHEET GRID
+// ══════════════════════════════════════════════════════════
+function addGridRow(name='', desc='', section=''){
+  const body=document.getElementById('grid-body');
+  const idx=body.children.length+1;
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td class="row-num">${idx}</td><td><input type="text" placeholder="e.g. Study ID" value="${escH(name)}"></td><td><input type="text" placeholder="e.g. First author and year" value="${escH(desc)}"></td><td><input type="text" placeholder="e.g. Study Identification" value="${escH(section)}"></td><td class="del-cell"><button title="Remove row">&times;</button></td>`;
+  tr.querySelector('.del-cell button').addEventListener('click',()=>{tr.remove();renumberRows()});
+  body.appendChild(tr);
+}
+function escH(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
+function renumberRows(){
+  document.querySelectorAll('#grid-body tr').forEach((tr,i)=>{
+    const td=tr.querySelector('.row-num');if(td)td.textContent=i+1;
+  });
+}
+function getGridFields(){
+  const fields=[];
+  document.querySelectorAll('#grid-body tr').forEach(tr=>{
+    const inputs=tr.querySelectorAll('input');
+    const name=(inputs[0]?.value||'').trim();
+    if(name) fields.push({name, description:(inputs[1]?.value||'').trim(), section:(inputs[2]?.value||'').trim()});
+  });
+  return fields;
+}
+function populateGrid(fields){
+  document.getElementById('grid-body').innerHTML='';
+  fields.forEach(f=>addGridRow(f.name||f.Field||'', f.description||f.Description||'', f.section||f.Section||''));
+  if(fields.length===0) for(let i=0;i<5;i++) addGridRow();
+}
+
+// Paste from clipboard
+document.getElementById('paste-from-clipboard-btn')?.addEventListener('click', async()=>{
+  try{
+    const text=await navigator.clipboard.readText();
+    if(!text.trim()){toast('Clipboard is empty','warning');return}
+    const rows=text.split('\n').map(r=>r.split('\t'));
+    // Detect if first row is header
+    const firstRow=rows[0].map(c=>(c||'').toLowerCase().trim());
+    const hasHeader=firstRow.some(c=>['field','name','column','variable','description','section'].includes(c));
+    const dataRows=hasHeader?rows.slice(1):rows;
+    const fields=dataRows.filter(r=>r[0]?.trim()).map(r=>({
+      name:(r[0]||'').trim(),
+      description:(r[1]||'').trim(),
+      section:(r[2]||'').trim()
+    }));
+    if(!fields.length){toast('No fields found in pasted data','warning');return}
+    populateGrid(fields);
+    toast(`Pasted ${fields.length} fields from clipboard`,'success');
+  }catch(err){
+    toast('Clipboard access denied. Try Ctrl+V into the grid instead.','error');
+  }
+});
+
+document.getElementById('add-row-btn')?.addEventListener('click',()=>addGridRow());
+document.getElementById('add-5-rows-btn')?.addEventListener('click',()=>{for(let i=0;i<5;i++)addGridRow()});
+document.getElementById('clear-grid-btn')?.addEventListener('click',()=>{document.getElementById('grid-body').innerHTML='';for(let i=0;i<5;i++)addGridRow()});
+
+document.getElementById('save-template-btn')?.addEventListener('click',()=>{
+  const fields=getGridFields();
+  if(!fields.length){toast('Add at least one field','error');return}
+  S.templateFields=fields;
+  LS.set('ex_template',fields);
+  updateDashboard();
+  document.getElementById('template-status').textContent=`✅ ${fields.length} fields saved`;
+  toast(`Template saved: ${fields.length} fields`,'success');
+});
+
+// Template file upload (XLSX parsing via SheetJS)
+function setupTemplateUpload(){
+  const drop=document.getElementById('template-drop');
+  const inp=document.getElementById('template-file-input');
+  if(!drop||!inp)return;
+  drop.addEventListener('click',()=>inp.click());
+  drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag-over')});
+  drop.addEventListener('dragleave',()=>drop.classList.remove('drag-over'));
+  drop.addEventListener('drop',async e=>{e.preventDefault();drop.classList.remove('drag-over');if(e.dataTransfer.files[0])await loadTemplateFile(e.dataTransfer.files[0])});
+  inp.addEventListener('change',async e=>{if(e.target.files[0])await loadTemplateFile(e.target.files[0]);inp.value=''});
+}
+async function loadTemplateFile(file){
+  const ext=file.name.split('.').pop().toLowerCase();
+  try{
+    if(ext==='xlsx'||ext==='xls'){
+      const data=await file.arrayBuffer();
+      const wb=XLSX.read(data);
+      const fields=[];
+      wb.SheetNames.forEach(sn=>{
+        const ws=wb.Sheets[sn];
+        const json=XLSX.utils.sheet_to_json(ws,{header:1});
+        if(json.length>0){
+          // First row as headers or field names
+          const headers=json[0];
+          headers.forEach((h,i)=>{
+            const name=String(h||'').trim();
+            if(name&&!name.toLowerCase().startsWith('unnamed'))
+              fields.push({name, description:'', section:sn});
+          });
+        }
+      });
+      populateGrid(fields);
+      toast(`Loaded ${fields.length} fields from ${file.name}`,'success');
+    } else if(ext==='docx'){
+      // Simple docx text extraction — parse "Field: Description" lines
+      const text=await file.text();
+      // For docx we'd need mammoth.js, for now suggest paste approach
+      toast('For .docx templates, copy the field names into Excel first, then paste here. Or use .xlsx format.','warning',8000);
+    }
+  }catch(err){
+    toast(`Error reading template: ${err.message}`,'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// PDF UPLOAD
+// ══════════════════════════════════════════════════════════
+function setupPdfUpload(){
+  const drop=document.getElementById('pdf-drop');
+  const inp=document.getElementById('pdf-file-input');
+  if(!drop||!inp)return;
+  drop.addEventListener('click',()=>inp.click());
+  drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag-over')});
+  drop.addEventListener('dragleave',()=>drop.classList.remove('drag-over'));
+  drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag-over');addPdfFiles(e.dataTransfer.files)});
+  inp.addEventListener('change',e=>{addPdfFiles(e.target.files);inp.value=''});
+}
+function addPdfFiles(fileList){
+  const existing=new Set(S.pdfFiles.map(f=>f.name));
+  let added=0;
+  for(const f of fileList){
+    if(f.name.toLowerCase().endsWith('.pdf')&&!existing.has(f.name)){
+      S.pdfFiles.push(f);existing.add(f.name);added++;
+    }
+  }
+  renderPdfList();
+  updateDashboard();
+  if(added) toast(`Added ${added} PDF(s). Total: ${S.pdfFiles.length}`,'success');
+}
+function renderPdfList(){
+  const el=document.getElementById('pdf-list');if(!el)return;
+  if(!S.pdfFiles.length){el.innerHTML='';return}
+  el.innerHTML=S.pdfFiles.map((f,i)=>{
+    const sz=(f.size/1024).toFixed(0);
+    const extracted=S.results.find(r=>r['Source File']===f.name);
+    const failed=S.failures.find(r=>r.file===f.name);
+    const st=extracted?'done':failed?'fail':'pending';
+    const stText=extracted?'✅ Done':failed?'❌ Failed':'⏳ Pending';
+    return `<div class="file-item"><span style="font-size:16px">📄</span><span class="name">${f.name}</span><span class="size">${sz} KB</span><span class="status ${st}">${stText}</span></div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+// GEMINI API — Extraction Engine
+// Mirrors gemini_api_extractor.py exactly
+// ══════════════════════════════════════════════════════════
+async function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+
+const MAX_RETRIES = 3;
+
+async function uploadFileToGemini(file, key){
+  console.log(`[API] Uploading file: ${file.name} (${(file.size/1024).toFixed(0)} KB)`);
+  
+  // Read file as base64
+  const arrayBuf = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  let binary = '';
+  for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+  
+  // Use the inline data approach instead of Files API (simpler, no upload step)
+  return {
+    inlineData: {
+      mimeType: 'application/pdf',
+      data: base64
+    }
+  };
+}
+
+function createExtractionPrompt(fields){
+  let prompt = "You are an expert scientific researcher. Extract the following information from the attached PDF study.\n";
+  prompt += "Return the result as a valid JSON object where keys are the 'Field Name' and values are the extracted text/numbers. If information is strictly missing, use null.\n";
+  prompt += "Do not hallucinate data. If you are unsure, leave as null.\n\n";
+  
+  const sections = {};
+  fields.forEach(f=>{
+    const sec = f.section || 'General';
+    if(!sections[sec]) sections[sec]=[];
+    sections[sec].push(f);
+  });
+  
+  for(const [secName, secFields] of Object.entries(sections)){
+    prompt += `--- ${secName} ---\n`;
+    secFields.forEach(f=>{
+      const desc = f.description ? `: ${f.description}` : '';
+      prompt += `- ${f.name}${desc}\n`;
+    });
+  }
+  
+  prompt += "\nReturn ONLY the JSON object. No markdown formatting (like ```json), no preamble.";
+  return prompt;
+}
+
+function cleanJsonString(text){
+  let t=text.trim();
+  if(t.startsWith('```')){
+    const nl=t.indexOf('\n');
+    if(nl!==-1)t=t.slice(nl+1);
+    if(t.endsWith('```'))t=t.slice(0,-3);
+  }
+  return t.trim();
+}
+
+async function extractSinglePdf(file, prompt, key, model){
+  for(let attempt=1; attempt<=MAX_RETRIES; attempt++){
+    if(S.aborted) throw new Error('Aborted');
+    try{
+      console.log(`[API] Extracting ${file.name} — attempt ${attempt}/${MAX_RETRIES}`);
+      
+      // Prepare inline PDF data
+      const pdfPart = await uploadFileToGemini(file, key);
+      
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      console.log(`[API] POST ${url.replace(key,'***')}`);
+      
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          contents: [{parts: [pdfPart, {text: prompt}]}],
+          generationConfig: {temperature: 0.1, maxOutputTokens: 16384, responseMimeType: 'application/json'}
+        })
+      });
+      
+      console.log(`[API] Response status: ${r.status} ${r.statusText}`);
+      
+      if(r.ok){
+        const d = await r.json();
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text;
+        console.log(`[API] Success! Response length: ${(text||'').length} chars`);
+        
+        if(!text) throw new Error('Empty response from model');
+        
+        const cleaned = cleanJsonString(text);
+        let data = JSON.parse(cleaned);
+        
+        // Handle array response
+        if(Array.isArray(data)){
+          data = data.length>0 ? data[0] : null;
+          if(!data) throw new Error('Empty array returned');
+        }
+        
+        // Validate: must have some real content
+        const realFields = Object.entries(data).filter(([k,v])=>v!==null&&String(v).trim());
+        if(realFields.length<2){
+          throw new Error(`Only ${realFields.length} non-null fields extracted`);
+        }
+        
+        data['Source File'] = file.name;
+        return {data, error: null};
+      }
+      
+      const e = await r.json().catch(()=>({}));
+      const errMsg = e.error?.message || `Status ${r.status}`;
+      console.error(`[API] Error ${r.status}:`, errMsg);
+      console.error('[API] Full error:', JSON.stringify(e, null, 2));
+      
+      if(r.status===429 || errMsg.includes('RESOURCE_EXHAUSTED')){
+        console.log('[API] Rate limited — waiting 15s...');
+        toast(`Rate limited. Waiting 15s... (${file.name})`, 'warning', 16000);
+        await sleep(15000);
+      } else {
+        toast(`Error: ${errMsg.slice(0,80)}`, 'warning', 5000);
+        await sleep(5000);
+      }
+    }catch(err){
+      console.error(`[API] Exception on attempt ${attempt}:`, err.message);
+      if(err.message==='Aborted') throw err;
+      if(err instanceof SyntaxError){
+        // JSON parse error
+        return {data:null, error:`Invalid JSON response`};
+      }
+      if(attempt>=MAX_RETRIES) return {data:null, error:err.message};
+      await sleep(5000);
+    }
+  }
+  return {data:null, error:'All retries exhausted'};
+}
+
+// ══════════════════════════════════════════════════════════
+// RUN EXTRACTION
+// ══════════════════════════════════════════════════════════
+async function runExtraction(){
+  const key=getKey()||(document.getElementById('api-key-input')?.value?.trim()||'');
+  if(!key){toast('Enter your Gemini API key first.','error');return}
+  if(!S.templateFields.length){toast('Define extraction template first.','error');switchTab('template');return}
+  if(!S.pdfFiles.length){toast('Upload PDF files first.','error');return}
+  
+  // Save key if entered on upload page
+  if(!getKey()&&key){setKey(key);setModel(document.getElementById('model-select')?.value||'gemini-2.5-flash');updateApiStatus()}
+  
+  S.isRunning=true;S.aborted=false;
+  const runBtn=document.getElementById('run-btn');
+  const abortBtn=document.getElementById('abort-btn');
+  const pw=document.getElementById('progress-wrap');
+  if(runBtn){runBtn.disabled=true;runBtn.innerHTML='<div class="spinner"></div> Extracting…'}
+  if(abortBtn)abortBtn.style.display='inline-flex';
+  if(pw)pw.classList.add('visible');
+  
+  const model=document.getElementById('model-select')?.value||getModel();
+  const prompt=createExtractionPrompt(S.templateFields);
+  console.log('[Extraction] Prompt:\n', prompt);
+  
+  // Filter out already-extracted PDFs
+  const extractedNames=new Set(S.results.map(r=>r['Source File']));
+  const toProcess=S.pdfFiles.filter(f=>!extractedNames.has(f.name));
+  
+  if(!toProcess.length){
+    toast('All PDFs already extracted!','success');
+    S.isRunning=false;
+    if(runBtn){runBtn.disabled=false;runBtn.innerHTML='🤖 Run Extraction'}
+    if(abortBtn)abortBtn.style.display='none';
+    if(pw)pw.classList.remove('visible');
+    return;
+  }
+  
+  const total=toProcess.length;
+  let done=0;
+  
+  try{
+    for(let i=0;i<total;i++){
+      if(S.aborted) throw new Error('Aborted');
+      
+      const file=toProcess[i];
+      const pct=Math.round((i/total)*100);
+      updateProgress(`📄 Extracting: ${file.name}`, pct, `Processing study ${i+1} of ${total}…`, `${i} / ${total}`);
+      renderPdfList();
+      
+      const {data, error} = await extractSinglePdf(file, prompt, key, model);
+      
+      if(data){
+        S.results.push(data);
+        done++;
+        console.log(`[Extraction] ✅ ${file.name} — ${Object.keys(data).length} fields`);
+      } else {
+        S.failures.push({file:file.name, error:error||'Unknown'});
+        console.error(`[Extraction] ❌ ${file.name} — ${error}`);
+      }
+      
+      renderPdfList();
+      renderResults();
+      updateDashboard();
+      
+      // Rate limit: 4s between calls (matches Python agent)
+      if(i<total-1) await sleep(4000);
+    }
+    
+    updateProgress(`✅ Extraction complete — ${done} extracted, ${S.failures.length} failed`, 100, 'Done!', `${total} / ${total}`);
+    toast(`Extraction complete! ${done} studies extracted.`, 'success', 8000);
+    
+  }catch(err){
+    if(err.message==='Aborted'){
+      toast('Extraction aborted.','warning');
+    } else {
+      toast(`Error: ${err.message}`,'error',9000);
+      console.error(err);
+    }
+  }finally{
+    S.isRunning=false;
+    if(runBtn){runBtn.disabled=false;runBtn.innerHTML='🤖 Run Extraction'}
+    if(abortBtn)abortBtn.style.display='none';
+    if(pw)setTimeout(()=>pw.classList.remove('visible'),5000);
+    renderResults();
+    updateDashboard();
+  }
+}
+
+function updateProgress(lbl,pct,status,detail){
+  const fe=document.getElementById('progress-fill');
+  const le=document.getElementById('progress-label');
+  const pl=document.getElementById('prog-left');
+  const pr=document.getElementById('prog-right');
+  if(fe)fe.style.width=pct+'%';
+  if(le)le.textContent=lbl;
+  if(pl)pl.textContent=status||'';
+  if(pr)pr.textContent=detail||'';
+}
+
+// ══════════════════════════════════════════════════════════
+// RESULTS RENDERING
+// ══════════════════════════════════════════════════════════
+function renderResults(){
+  const con=document.getElementById('results-content');if(!con)return;
+  const badge=document.getElementById('results-badge');if(badge)badge.textContent=S.results.length;
+  
+  if(!S.results.length){
+    con.innerHTML='<div class="empty"><div class="empty-icon">📊</div><div class="empty-title">No results yet</div><div class="empty-text">Run an extraction to see results here.</div></div>';
+    return;
+  }
+  
+  // Collect all columns from results
+  const allCols=new Set();
+  S.results.forEach(r=>Object.keys(r).forEach(k=>allCols.add(k)));
+  // Put Source File first
+  const cols=['Source File',...[...allCols].filter(c=>c!=='Source File').sort()];
+  
+  let html='<div class="grid-wrap" style="max-height:500px;overflow:auto"><table class="results-table"><thead><tr>';
+  cols.forEach(c=>html+=`<th>${c}</th>`);
+  html+='</tr></thead><tbody>';
+  S.results.forEach(r=>{
+    html+='<tr>';
+    cols.forEach(c=>{
+      const v=r[c];
+      const display=v===null||v===undefined?'<span style="color:var(--text-3)">—</span>':String(v);
+      html+=`<td title="${display.replace(/"/g,'&quot;')}">${display}</td>`;
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  con.innerHTML=html;
+  
+  // Enable download buttons
+  document.getElementById('dl-xlsx-btn').disabled=false;
+  document.getElementById('dl-csv-btn').disabled=false;
+}
+
+// ══════════════════════════════════════════════════════════
+// EXPORT
+// ══════════════════════════════════════════════════════════
+function downloadXLSX(){
+  if(!S.results.length) return;
+  const ws=XLSX.utils.json_to_sheet(S.results);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Extracted Data');
+  XLSX.writeFile(wb, 'extracted_studies.xlsx');
+  toast('Downloaded extracted_studies.xlsx','success');
+}
+function downloadCSV(){
+  if(!S.results.length) return;
+  const allCols=new Set();
+  S.results.forEach(r=>Object.keys(r).forEach(k=>allCols.add(k)));
+  const cols=['Source File',...[...allCols].filter(c=>c!=='Source File').sort()];
+  const q=s=>String(s||'').replace(/"/g,'""');
+  let csv=cols.map(c=>`"${q(c)}"`).join(',')+'\n';
+  S.results.forEach(r=>{
+    csv+=cols.map(c=>`"${q(r[c]||'')}"`).join(',')+'\n';
+  });
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='extracted_studies.csv';a.click();
+  toast('Downloaded extracted_studies.csv','success');
+}
+
+// ══════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════
+function updateDashboard(){
+  const f=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v};
+  f('stat-fields',S.templateFields.length);
+  f('stat-pdfs',S.pdfFiles.length);
+  f('stat-extracted',S.results.length);
+  f('stat-failed',S.failures.length);
+}
+
+// ══════════════════════════════════════════════════════════
+// INITIALIZATION
+// ══════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+  // Setup upload handlers
+  setupTemplateUpload();
+  setupPdfUpload();
+  
+  // Run button
+  document.getElementById('run-btn')?.addEventListener('click',runExtraction);
+  document.getElementById('abort-btn')?.addEventListener('click',()=>{S.aborted=true;toast('Aborting after current study…','warning')});
+  
+  // Download buttons
+  document.getElementById('dl-xlsx-btn')?.addEventListener('click',downloadXLSX);
+  document.getElementById('dl-csv-btn')?.addEventListener('click',downloadCSV);
+  
+  // Save key from upload page
+  document.getElementById('save-key-btn')?.addEventListener('click',()=>{
+    const k=document.getElementById('api-key-input')?.value?.trim();
+    const m=document.getElementById('model-select')?.value;
+    if(k){setKey(k);if(m)setModel(m);updateApiStatus();toast('API key saved!','success')}
+    else toast('Enter a key first','error');
+  });
+  
+  // Settings
+  document.getElementById('settings-save-btn')?.addEventListener('click',()=>{
+    const k=document.getElementById('settings-api-key')?.value?.trim();
+    const m=document.getElementById('settings-model')?.value;
+    if(k)setKey(k);if(m)setModel(m);updateApiStatus();toast('Settings saved!','success');
+  });
+  document.getElementById('settings-clear-btn')?.addEventListener('click',()=>{
+    LS.del('ex_key');LS.del('ex_model');updateApiStatus();
+    if(document.getElementById('settings-api-key'))document.getElementById('settings-api-key').value='';
+    toast('API key cleared','info');
+  });
+  document.getElementById('clear-results-btn')?.addEventListener('click',()=>{
+    S.results=[];S.failures=[];renderResults();renderPdfList();updateDashboard();toast('Results cleared','info');
+  });
+  
+  // Restore saved values
+  const sk=getKey();
+  if(sk){
+    const ki=document.getElementById('api-key-input');if(ki)ki.value=sk;
+    const si=document.getElementById('settings-api-key');if(si)si.value=sk;
+  }
+  const sm=getModel();
+  const ms=document.getElementById('model-select');if(ms)ms.value=sm;
+  const ms2=document.getElementById('settings-model');if(ms2)ms2.value=sm;
+  
+  // Restore template
+  const savedTemplate=LS.get('ex_template',[]);
+  if(savedTemplate.length){
+    S.templateFields=savedTemplate;
+    populateGrid(savedTemplate);
+  } else {
+    for(let i=0;i<5;i++) addGridRow();
+  }
+  
+  updateApiStatus();
+  updateDashboard();
+});
+</script>
+</body>
+</html>
