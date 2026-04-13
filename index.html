@@ -9,6 +9,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- SheetJS for XLSX export -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<!-- Mammoth.js for DOCX parsing -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
 :root{
   --bg:#0a0e1a;--surface:#111827;--surface-2:#1a2236;--surface-3:#232d45;
@@ -250,8 +252,8 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
     <div class="card-title">🔑 API Configuration</div>
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
       <div class="input-group" style="flex:1;min-width:280px">
-        <label class="input-label">Gemini API Key</label>
-        <input class="input" type="password" id="api-key-input" placeholder="AIza...">
+        <label class="input-label">Gemini API Key(s) — comma-separated for rotation</label>
+        <textarea class="input" id="api-key-input" rows="2" placeholder="AIza...key1, AIza...key2, AIza...key3" style="font-family:'Courier New',monospace;font-size:12px;min-height:44px"></textarea>
       </div>
       <div class="input-group" style="min-width:190px;max-width:220px">
         <label class="input-label">Model</label>
@@ -264,6 +266,7 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
       </div>
       <button class="btn btn-ghost" id="save-key-btn" style="margin-bottom:14px">Save</button>
     </div>
+    <p style="margin-top:6px;font-size:11.5px;color:var(--text-3)">💡 Enter multiple API keys separated by commas for automatic rotation on rate limits (429 errors).</p>
   </div>
   
   <div class="card">
@@ -311,11 +314,11 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
 <div class="tab-panel" id="tab-settings">
   <div class="page-header"><h1>Settings</h1><p>Configure API key and extraction preferences.</p></div>
   <div class="card">
-    <div class="card-title">🔑 Gemini API Key</div>
+    <div class="card-title">🔑 Gemini API Keys</div>
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
       <div class="input-group" style="flex:1">
-        <label class="input-label">API Key</label>
-        <input class="input" type="password" id="settings-api-key" placeholder="AIza...">
+        <label class="input-label">API Key(s) — comma-separated for rotation</label>
+        <textarea class="input" id="settings-api-key" rows="2" placeholder="AIza...key1, AIza...key2" style="font-family:'Courier New',monospace;font-size:12px;min-height:44px"></textarea>
       </div>
       <div class="input-group">
         <label class="input-label">Default Model</label>
@@ -329,9 +332,9 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
     </div>
     <div style="display:flex;gap:10px;margin-top:14px">
       <button class="btn btn-primary" id="settings-save-btn">Save Settings</button>
-      <button class="btn btn-danger" id="settings-clear-btn">Clear Key</button>
+      <button class="btn btn-danger" id="settings-clear-btn">Clear Keys</button>
     </div>
-    <p style="margin-top:8px;font-size:11.5px;color:var(--text-3)">API key is stored only in your browser's localStorage. Get a free key at <a href="https://aistudio.google.com" target="_blank" style="color:var(--cyan)">aistudio.google.com</a>.</p>
+    <p style="margin-top:8px;font-size:11.5px;color:var(--text-3)">API keys stored only in your browser's localStorage. Get a free key at <a href="https://aistudio.google.com" target="_blank" style="color:var(--cyan)">aistudio.google.com</a>.</p>
   </div>
   <div class="card">
     <div class="card-title">🗑️ Data Management</div>
@@ -356,6 +359,7 @@ const S = {
   failures: [],       // [{file, error}]
   isRunning: false,
   aborted: false,
+  currentKeyIndex: 0, // For key rotation
 };
 
 // ── LOCAL STORAGE ─────────────────────────────────────────
@@ -364,8 +368,21 @@ const LS={
   set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
   del:(k)=>{try{localStorage.removeItem(k)}catch{}}
 };
-const getKey=()=>LS.get('ex_key','');
+// Multi-key support: stored as comma-separated string
+const getKeys=()=>{
+  const raw=LS.get('ex_key','');
+  return raw.split(',').map(k=>k.trim()).filter(k=>k.length>10);
+};
+const getKey=()=>{const keys=getKeys();return keys.length?keys[S.currentKeyIndex%keys.length]:'';};
 const setKey=(v)=>LS.set('ex_key',v);
+function rotateKey(){
+  const keys=getKeys();
+  if(keys.length<=1) return false;
+  S.currentKeyIndex=(S.currentKeyIndex+1)%keys.length;
+  console.log(`[API] ↻ Rotated to key ${S.currentKeyIndex+1}/${keys.length}`);
+  toast(`Rotated to API key ${S.currentKeyIndex+1}/${keys.length}`,'info',3000);
+  return true;
+}
 const getModel=()=>{
   const validModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'];
   const m = LS.get('ex_model','gemini-2.5-flash');
@@ -395,11 +412,12 @@ document.querySelectorAll('.nav-item[data-tab]').forEach(n=>n.addEventListener('
 
 // ── API STATUS ─────────────────────────────────────────────
 function updateApiStatus(){
-  const ok=!!getKey();
+  const keys=getKeys();
+  const ok=keys.length>0;
   const dot=document.getElementById('api-dot');
   const lbl=document.getElementById('api-label');
   if(dot)dot.className='api-dot'+(ok?' ok':'');
-  if(lbl)lbl.textContent=ok?'API Connected':'No API Key';
+  if(lbl)lbl.textContent=ok?`API Connected (${keys.length} key${keys.length>1?'s':''})`:'No API Key';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -493,7 +511,6 @@ async function loadTemplateFile(file){
         const ws=wb.Sheets[sn];
         const json=XLSX.utils.sheet_to_json(ws,{header:1});
         if(json.length>0){
-          // First row as headers or field names
           const headers=json[0];
           headers.forEach((h,i)=>{
             const name=String(h||'').trim();
@@ -502,15 +519,62 @@ async function loadTemplateFile(file){
           });
         }
       });
-      populateGrid(fields);
-      toast(`Loaded ${fields.length} fields from ${file.name}`,'success');
+      if(fields.length){
+        populateGrid(fields);
+        // Auto-save
+        S.templateFields=fields;
+        LS.set('ex_template',fields);
+        updateDashboard();
+        document.getElementById('template-status').textContent=`✅ ${fields.length} fields loaded from ${file.name}`;
+        toast(`Loaded ${fields.length} fields from ${file.name}`,'success');
+      } else {
+        toast('No fields found in spreadsheet','warning');
+      }
     } else if(ext==='docx'){
-      // Simple docx text extraction — parse "Field: Description" lines
-      const text=await file.text();
-      // For docx we'd need mammoth.js, for now suggest paste approach
-      toast('For .docx templates, copy the field names into Excel first, then paste here. Or use .xlsx format.','warning',8000);
+      // Parse .docx using mammoth.js — mirrors Python WordTemplateParser
+      const arrayBuf=await file.arrayBuffer();
+      const result=await mammoth.extractRawText({arrayBuffer:arrayBuf});
+      const text=result.value;
+      const fields=[];
+      let currentSection='';
+      const sectionPatterns=[/^[A-Z][A-Za-z\s]+(Details|Characteristics|Outcomes|Identification|Information)$/,
+        /^[A-Z][A-Za-z\s]+\([A-Za-z\s:±]+\)$/];
+      
+      for(const line of text.split('\n')){
+        const t=line.trim();
+        if(!t) continue;
+        // Section header detection (matches Python agent)
+        const isSection=(()=>{
+          if(t.endsWith(':')) return false;
+          if(sectionPatterns.some(p=>p.test(t))) return true;
+          if(t===t.toUpperCase()&&t.length>3&&t.length<80) return true;
+          const words=t.split(/\s+/);
+          if(words.length<=6&&t===t.split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' ')&&!t.includes(':')) return true;
+          return false;
+        })();
+        if(isSection){currentSection=t;continue}
+        // Field: Description pattern
+        const m=t.match(/^(.+?):\s*(.*)$/);
+        if(m){
+          const fname=m[1].trim();
+          const fdesc=m[2].trim();
+          if(['template','data extraction','meta-analysis'].some(kw=>fname.toLowerCase().includes(kw))) continue;
+          fields.push({name:fname, description:fdesc, section:currentSection});
+        }
+      }
+      if(fields.length){
+        populateGrid(fields);
+        S.templateFields=fields;
+        LS.set('ex_template',fields);
+        updateDashboard();
+        document.getElementById('template-status').textContent=`✅ ${fields.length} fields loaded from ${file.name}`;
+        toast(`Loaded ${fields.length} fields from ${file.name}`,'success');
+      } else {
+        toast('No Field: Description patterns found in .docx. Try paste approach instead.','warning',6000);
+      }
     }
   }catch(err){
+    console.error('[Template] Parse error:', err);
     toast(`Error reading template: ${err.message}`,'error');
   }
 }
@@ -669,9 +733,13 @@ async function extractSinglePdf(file, prompt, key, model){
       console.error('[API] Full error:', JSON.stringify(e, null, 2));
       
       if(r.status===429 || errMsg.includes('RESOURCE_EXHAUSTED')){
-        console.log('[API] Rate limited — waiting 15s...');
-        toast(`Rate limited. Waiting 15s... (${file.name})`, 'warning', 16000);
-        await sleep(15000);
+        if(rotateKey()){
+          console.log('[API] Rate limited — rotated key, retrying immediately...');
+        } else {
+          console.log('[API] Rate limited — all keys exhausted, waiting 15s...');
+          toast(`Rate limited. Waiting 15s... (${file.name})`, 'warning', 16000);
+          await sleep(15000);
+        }
       } else {
         toast(`Error: ${errMsg.slice(0,80)}`, 'warning', 5000);
         await sleep(5000);
@@ -694,13 +762,14 @@ async function extractSinglePdf(file, prompt, key, model){
 // RUN EXTRACTION
 // ══════════════════════════════════════════════════════════
 async function runExtraction(){
-  const key=getKey()||(document.getElementById('api-key-input')?.value?.trim()||'');
+  // Save key(s) if entered on upload page
+  const rawKeys=document.getElementById('api-key-input')?.value?.trim()||'';
+  if(rawKeys&&!getKey()){setKey(rawKeys);setModel(document.getElementById('model-select')?.value||'gemini-2.5-flash');updateApiStatus()}
+  const key=getKey();
   if(!key){toast('Enter your Gemini API key first.','error');return}
   if(!S.templateFields.length){toast('Define extraction template first.','error');switchTab('template');return}
   if(!S.pdfFiles.length){toast('Upload PDF files first.','error');return}
-  
-  // Save key if entered on upload page
-  if(!getKey()&&key){setKey(key);setModel(document.getElementById('model-select')?.value||'gemini-2.5-flash');updateApiStatus()}
+  S.currentKeyIndex=0; // Reset key rotation
   
   S.isRunning=true;S.aborted=false;
   const runBtn=document.getElementById('run-btn');
@@ -739,7 +808,7 @@ async function runExtraction(){
       updateProgress(`📄 Extracting: ${file.name}`, pct, `Processing study ${i+1} of ${total}…`, `${i} / ${total}`);
       renderPdfList();
       
-      const {data, error} = await extractSinglePdf(file, prompt, key, model);
+      const {data, error} = await extractSinglePdf(file, prompt, getKey(), model);
       
       if(data){
         S.results.push(data);
@@ -884,7 +953,11 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('save-key-btn')?.addEventListener('click',()=>{
     const k=document.getElementById('api-key-input')?.value?.trim();
     const m=document.getElementById('model-select')?.value;
-    if(k){setKey(k);if(m)setModel(m);updateApiStatus();toast('API key saved!','success')}
+    if(k){
+      setKey(k);if(m)setModel(m);updateApiStatus();
+      const cnt=k.split(',').filter(x=>x.trim().length>10).length;
+      toast(`${cnt} API key${cnt>1?'s':''} saved!`,'success');
+    }
     else toast('Enter a key first','error');
   });
   
@@ -892,7 +965,9 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('settings-save-btn')?.addEventListener('click',()=>{
     const k=document.getElementById('settings-api-key')?.value?.trim();
     const m=document.getElementById('settings-model')?.value;
-    if(k)setKey(k);if(m)setModel(m);updateApiStatus();toast('Settings saved!','success');
+    if(k)setKey(k);if(m)setModel(m);updateApiStatus();
+    const cnt=k?k.split(',').filter(x=>x.trim().length>10).length:0;
+    toast(`Settings saved! ${cnt} key${cnt>1?'s':''} configured.`,'success');
   });
   document.getElementById('settings-clear-btn')?.addEventListener('click',()=>{
     LS.del('ex_key');LS.del('ex_model');updateApiStatus();
@@ -904,7 +979,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   });
   
   // Restore saved values
-  const sk=getKey();
+  const sk=LS.get('ex_key','');
   if(sk){
     const ki=document.getElementById('api-key-input');if(ki)ki.value=sk;
     const si=document.getElementById('settings-api-key');if(si)si.value=sk;
