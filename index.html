@@ -152,7 +152,12 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
 .mb-8{margin-bottom:8px}.mb-16{margin-bottom:16px}
 .gap-8{gap:8px}.gap-10{gap:10px}
 .paste-hint{font-size:11.5px;color:var(--text-3);margin-top:6px}
+.health-badge{padding:2px 10px;border-radius:999px;background:#eee;font-size:11px;vertical-align:middle}
+.health-badge.ok{background:#c6f6d5;color:#22543d}
+.health-badge.waking{background:#fefcbf;color:#744210}
+.health-badge.offline{background:#fed7d7;color:#742a2a}
 </style>
+<script src="js/api.js"></script>
 </head>
 <body>
 
@@ -178,6 +183,9 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
   <div class="api-status">
     <span class="api-dot" id="api-dot"></span>
     <span id="api-label">No API Key</span>
+    <div style="margin-top:8px">
+      <span id="backend-health" class="health-badge" title="Backend API status">Backend: <span id="backend-health-text">…</span></span>
+    </div>
   </div>
 </nav>
 
@@ -370,6 +378,7 @@ const S = {
   aborted: false,
   currentKeyIndex: 0, // For key rotation
   activeFile: null,   // Currently processing file name
+  currentJobId: null, // Backend job ID for in-flight job
 };
 
 // ── LOCAL STORAGE ─────────────────────────────────────────
@@ -836,126 +845,140 @@ async function extractSinglePdf(file, prompt, key, model){
 // RUN EXTRACTION
 // ══════════════════════════════════════════════════════════
 async function runExtraction(){
-  // Save key(s) if entered on upload page
-  const rawKeys=document.getElementById('api-key-input')?.value?.trim()||'';
-  if(rawKeys&&!getKey()){setKey(rawKeys);setModel(document.getElementById('model-select')?.value||'gemini-2.5-flash');updateApiStatus()}
-  const key=getKey();
-  if(!key){toast('Enter your Gemini API key first.','error');return}
-  if(!S.templateFields.length){toast('Define extraction template first.','error');switchTab('template');return}
-  if(!S.pdfFiles.length){toast('Upload PDF files first.','error');return}
-  S.currentKeyIndex=0; // Reset key rotation
-  
-  S.isRunning=true;S.aborted=false;
-  const runBtn=document.getElementById('run-btn');
-  const abortBtn=document.getElementById('abort-btn');
-  const pw=document.getElementById('progress-wrap');
-  if(runBtn){runBtn.disabled=true;runBtn.innerHTML='<div class="spinner"></div> Extracting…'}
-  if(abortBtn)abortBtn.style.display='inline-flex';
-  if(pw)pw.classList.add('visible');
-  
-  const model=document.getElementById('model-select')?.value||getModel();
-  const prompt=createExtractionPrompt(S.templateFields);
-  console.log('[Extraction] Prompt:\n', prompt);
-  
-  // Filter out already-extracted PDFs
-  const extractedNames=new Set(S.results.map(r=>r['Source File']));
-  const toProcess=S.pdfFiles.filter(f=>!extractedNames.has(f.name));
-  
-  if(!toProcess.length){
-    toast('All PDFs already extracted!','success');
-    S.isRunning=false;
-    if(runBtn){runBtn.disabled=false;runBtn.innerHTML='🤖 Run Extraction'}
-    if(abortBtn)abortBtn.style.display='none';
-    if(pw)pw.classList.remove('visible');
-    return;
-  }
-  
-  const total=toProcess.length;
-  let done=0;
-  const startTime=Date.now();
-  
-  // Show live stats panel
-  const liveStats=document.getElementById('live-stats');
-  if(liveStats)liveStats.style.display='block';
-  
-  // Live stats updater
-  const statsTimer=setInterval(()=>{
-    const elapsed=Math.floor((Date.now()-startTime)/1000);
-    const mins=Math.floor(elapsed/60);
-    const secs=elapsed%60;
-    const el=document.getElementById('st-elapsed');if(el)el.textContent=mins>0?`${mins}m ${secs}s`:`${secs}s`;
-    const avg=document.getElementById('st-avg');if(avg)avg.textContent=done>0?`${(elapsed/done).toFixed(1)}s`:'—';
-    // ETA calculation
-    const etaEl=document.getElementById('st-eta');
-    if(etaEl){
-      if(done>0){
-        const avgSec=elapsed/done;
-        const remaining=total-done;
-        const etaSec=Math.round(avgSec*remaining);
-        const etaM=Math.floor(etaSec/60);
-        const etaS=etaSec%60;
-        etaEl.textContent=etaM>0?`~${etaM}m ${etaS}s`:`~${etaS}s`;
-      } else {
-        etaEl.textContent='calculating…';
-      }
-    }
-    const ok=document.getElementById('st-ok');if(ok)ok.textContent=done;
-    const fl=document.getElementById('st-fail');if(fl)fl.textContent=S.failures.length;
-    const ky=document.getElementById('st-key');if(ky)ky.textContent=`${S.currentKeyIndex+1}/${getKeys().length||1}`;
-  },1000);
-  
-  try{
-    for(let i=0;i<total;i++){
-      if(S.aborted) throw new Error('Aborted');
-      
-      const file=toProcess[i];
-      S.activeFile=file.name;
-      const pct=Math.round((i/total)*100);
-      updateProgress(`📄 Extracting: ${file.name}`, pct, `Processing study ${i+1} of ${total}…`, `${i} / ${total}`);
-      renderPdfList();
-      
-      const {data, error} = await extractSinglePdf(file, prompt, getKey(), model);
-      
-      S.activeFile=null;
-      if(data){
-        S.results.push(data);
-        done++;
-        autoSaveResults(); // Persist immediately so back/refresh won't lose data
-        console.log(`[Extraction] ✅ ${file.name} — ${Object.keys(data).length} fields`);
-      } else {
-        S.failures.push({file:file.name, error:error||'Unknown'});
-        autoSaveFailures();
-        console.error(`[Extraction] ❌ ${file.name} — ${error}`);
-      }
-      
-      renderPdfList();
-      renderResults();
-      updateDashboard();
-      
-      // Rate limit: 4s between calls (matches Python agent)
-      if(i<total-1) await sleep(4000);
-    }
-    
-    updateProgress(`✅ Extraction complete — ${done} extracted, ${S.failures.length} failed`, 100, 'Done!', `${total} / ${total}`);
-    toast(`Extraction complete! ${done} studies extracted.`, 'success', 8000);
-    
-  }catch(err){
-    if(err.message==='Aborted'){
-      toast('Extraction aborted.','warning');
+  // Save keys if entered on upload page
+  const rawKeys = document.getElementById('api-key-input')?.value?.trim() || '';
+  if (rawKeys && !getKey()) { setKey(rawKeys); setModel(document.getElementById('model-select')?.value || 'gemini-2.5-flash'); updateApiStatus(); }
+  const apiKeys = getKeys().join(',');
+  if (!apiKeys) { toast('Enter your Gemini API key first.', 'error'); return; }
+  if (!S.templateFields.length) { toast('Define extraction template first.', 'error'); switchTab('template'); return; }
+  if (!S.pdfFiles.length) { toast('Upload PDF files first.', 'error'); return; }
+
+  const model = document.getElementById('model-select')?.value || getModel();
+
+  // Build template xlsx from S.templateFields using SheetJS
+  const fieldNames = S.templateFields.map(f => f.name);
+  const tplWb = XLSX.utils.book_new();
+  const tplWs = XLSX.utils.aoa_to_sheet([fieldNames]);
+  XLSX.utils.book_append_sheet(tplWb, tplWs, 'Template');
+  const tplBytes = XLSX.write(tplWb, { type: 'array', bookType: 'xlsx' });
+  const templateBlob = new Blob([tplBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const templateFile = new File([templateBlob], 'template.xlsx', { type: templateBlob.type });
+
+  S.isRunning = true; S.aborted = false; S.currentJobId = null;
+  const runBtn = document.getElementById('run-btn');
+  const abortBtn = document.getElementById('abort-btn');
+  const pw = document.getElementById('progress-wrap');
+  if (runBtn) { runBtn.disabled = true; runBtn.innerHTML = '<div class="spinner"></div> Submitting…'; }
+  if (abortBtn) abortBtn.style.display = 'inline-flex';
+  if (pw) pw.classList.add('visible');
+  updateProgress('Submitting job to backend…', 0, 'Starting…', '');
+
+  try {
+    const { job_id } = await window.SRApi.startJob({
+      pdfs: S.pdfFiles,
+      template: templateFile,
+      apiKeys,
+      model,
+      outputFormat: 'xlsx',
+    });
+    S.currentJobId = job_id;
+    if (runBtn) runBtn.innerHTML = '<div class="spinner"></div> Extracting…';
+    updateProgress('Job accepted', 5, `Job ${job_id.slice(0, 8)}…`, 'Polling status…');
+    await _pollUntilDone(job_id);
+  } catch (e) {
+    if (e && e.code === 'AbortError') {
+      toast('Extraction aborted.', 'warning');
     } else {
-      toast(`Error: ${err.message}`,'error',9000);
-      console.error(err);
+      toast(`Error: ${e.message || e} (${e.code || ''})`, 'error');
+      console.error('[SRApi] runExtraction error', e);
     }
-  }finally{
+  } finally {
+    S.isRunning = false;
+    if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = '🤖 Run Extraction'; }
+    if (abortBtn) abortBtn.style.display = 'none';
+    if (pw) pw.classList.remove('visible');
+    const liveStats = document.getElementById('live-stats');
+    if (liveStats) liveStats.style.display = 'none';
+  }
+}
+
+async function _pollUntilDone(jobId) {
+  const POLL_MS = 2000;
+  const liveStats = document.getElementById('live-stats');
+  if (liveStats) liveStats.style.display = 'block';
+  const startTime = Date.now();
+
+  // Live elapsed timer
+  const statsTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const mins = Math.floor(elapsed / 60), secs = elapsed % 60;
+    const el = document.getElementById('st-elapsed'); if (el) el.textContent = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  }, 1000);
+
+  try {
+    while (true) {
+      if (S.aborted) {
+        await window.SRApi.cancelJob(jobId).catch(() => {});
+        throw Object.assign(new Error('Aborted'), { code: 'AbortError' });
+      }
+
+      let snap;
+      try {
+        snap = await window.SRApi.getStatus(jobId);
+      } catch (e) {
+        updateProgress('Connection lost — retrying…', null, `Error: ${e.code}`, '');
+        await new Promise(r => setTimeout(r, POLL_MS * 2));
+        continue;
+      }
+
+      const p = snap.progress;
+      const pct = p.chunks_total > 0 ? Math.round((p.chunks_done / p.chunks_total) * 90) + 5 : 10;
+      updateProgress(
+        `${snap.status === 'running' ? '⚙️ Extracting' : '⏳ Queued'} — ${p.chunks_done}/${p.chunks_total} chunks`,
+        pct,
+        `Studies: ${p.studies_done}/${p.studies_total} done, ${p.studies_failed} failed`,
+        p.eta_seconds > 0 ? `ETA ~${p.eta_seconds}s` : ''
+      );
+      const etaEl = document.getElementById('st-eta'); if (etaEl) etaEl.textContent = p.eta_seconds > 0 ? `~${p.eta_seconds}s` : '—';
+      const avgEl = document.getElementById('st-avg'); if (avgEl) avgEl.textContent = p.rate_per_min > 0 ? `${(60 / p.rate_per_min).toFixed(1)}s` : '—';
+
+      if (snap.status === 'done') {
+        updateProgress('✅ Done! Downloading…', 95, 'Downloading result…', '');
+        const resp = await window.SRApi.downloadResult(jobId);
+        const blob = await resp.blob();
+        // Parse xlsx and populate S.results
+        const arrayBuffer = await blob.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws);
+        S.results = rows;
+        autoSaveResults();
+        renderResults();
+        switchTab('results');
+        updateProgress('✅ Complete', 100, 'Done', '');
+        toast(`Extraction complete — ${rows.length} stud${rows.length === 1 ? 'y' : 'ies'} extracted.`, 'success');
+        // Also trigger auto-download of the file
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `sr-extract-${jobId.slice(0,8)}.xlsx`;
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+        return;
+      }
+
+      if (snap.status === 'failed') {
+        toast(`Extraction failed: ${snap.error_message || snap.error_code}`, 'error');
+        updateProgress('❌ Failed', null, snap.error_code || 'pipeline_error', snap.error_message || '');
+        return;
+      }
+
+      if (snap.status === 'cancelled') {
+        toast('Job was cancelled.', 'warning');
+        return;
+      }
+
+      await new Promise(r => setTimeout(r, POLL_MS));
+    }
+  } finally {
     clearInterval(statsTimer);
-    S.isRunning=false;
-    S.activeFile=null;
-    if(runBtn){runBtn.disabled=false;runBtn.innerHTML='🤖 Run Extraction'}
-    if(abortBtn)abortBtn.style.display='none';
-    if(pw)setTimeout(()=>pw.classList.remove('visible'),5000);
-    renderPdfList();
-    renderResults();
-    updateDashboard();
   }
 }
 
@@ -1055,7 +1078,11 @@ document.addEventListener('DOMContentLoaded',()=>{
   
   // Run button
   document.getElementById('run-btn')?.addEventListener('click',runExtraction);
-  document.getElementById('abort-btn')?.addEventListener('click',()=>{S.aborted=true;toast('Aborting after current study…','warning')});
+  document.getElementById('abort-btn')?.addEventListener('click',()=>{
+    S.aborted=true;
+    toast('Aborting — cancelling job on backend…','warning');
+    if(S.currentJobId) window.SRApi.cancelJob(S.currentJobId).catch(()=>{});
+  });
   
   // Download buttons
   document.getElementById('dl-xlsx-btn')?.addEventListener('click',downloadXLSX);
@@ -1125,6 +1152,25 @@ document.addEventListener('DOMContentLoaded',()=>{
   updateApiStatus();
   updateDashboard();
 });
+
+// ── Backend health indicator ─────────────────────────────
+async function pollHealth() {
+  const badge = document.getElementById('backend-health');
+  const text  = document.getElementById('backend-health-text');
+  if (!badge || !text) return;
+  try {
+    const t0 = Date.now();
+    await window.SRApi.pingHealth();
+    const dt = Date.now() - t0;
+    badge.className = 'health-badge ' + (dt > 5000 ? 'waking' : 'ok');
+    text.textContent = dt > 5000 ? 'waking up…' : 'online';
+  } catch {
+    badge.className = 'health-badge offline';
+    text.textContent = 'offline';
+  }
+}
+pollHealth();
+setInterval(pollHealth, 60000);
 </script>
 </body>
 </html>
