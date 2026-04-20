@@ -3,7 +3,7 @@
  */
 (function () {
   'use strict';
-  const DEFAULT_BASE = 'https://sr-extract-api.onrender.com';
+  const DEFAULT_BASE = 'https://sr-extract-v3.onrender.com';
   const API_BASE = (window.SR_API_BASE || DEFAULT_BASE).replace(/\/$/, '');
 
   class ApiError extends Error {
