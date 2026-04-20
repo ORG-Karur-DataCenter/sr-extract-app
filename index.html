@@ -996,6 +996,20 @@ function updateProgress(lbl,pct,status,detail){
 // ══════════════════════════════════════════════════════════
 // RESULTS RENDERING
 // ══════════════════════════════════════════════════════════
+
+/**
+ * Order columns: _study_id first, then Source File, then user-defined
+ * fields (no leading underscore, alphabetical), then remaining metadata
+ * fields (leading underscore, alphabetical, excluding _study_id).
+ */
+function _sortCols(allCols){
+  const PIN_FIRST = '_study_id';
+  const rest = allCols.filter(c => c !== PIN_FIRST);
+  const userFields = rest.filter(c => !c.startsWith('_')).sort();
+  const metaFields = rest.filter(c => c.startsWith('_')).sort();
+  return [PIN_FIRST, ...userFields, ...metaFields];
+}
+
 function renderResults(){
   const con=document.getElementById('results-content');if(!con)return;
   const badge=document.getElementById('results-badge');if(badge)badge.textContent=S.results.length;
@@ -1008,8 +1022,8 @@ function renderResults(){
   // Collect all columns from results
   const allCols=new Set();
   S.results.forEach(r=>Object.keys(r).forEach(k=>allCols.add(k)));
-  // Put Source File first
-  const cols=['Source File',...[...allCols].filter(c=>c!=='Source File').sort()];
+  // _study_id first, then Source File, then user fields (no leading _), then metadata (_)
+  const cols=_sortCols([...allCols]);
   
   let html='<div class="grid-wrap" style="max-height:500px;overflow:auto"><table class="results-table"><thead><tr>';
   cols.forEach(c=>html+=`<th>${c}</th>`);
@@ -1036,7 +1050,10 @@ function renderResults(){
 // ══════════════════════════════════════════════════════════
 function downloadXLSX(){
   if(!S.results.length) return;
-  const ws=XLSX.utils.json_to_sheet(S.results);
+  const allCols=new Set();
+  S.results.forEach(r=>Object.keys(r).forEach(k=>allCols.add(k)));
+  const header=_sortCols([...allCols]);
+  const ws=XLSX.utils.json_to_sheet(S.results,{header});
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Extracted Data');
   XLSX.writeFile(wb, 'extracted_studies.xlsx');
@@ -1046,7 +1063,7 @@ function downloadCSV(){
   if(!S.results.length) return;
   const allCols=new Set();
   S.results.forEach(r=>Object.keys(r).forEach(k=>allCols.add(k)));
-  const cols=['Source File',...[...allCols].filter(c=>c!=='Source File').sort()];
+  const cols=_sortCols([...allCols]);
   const q=s=>String(s||'').replace(/"/g,'""');
   let csv=cols.map(c=>`"${q(c)}"`).join(',')+'\n';
   S.results.forEach(r=>{
