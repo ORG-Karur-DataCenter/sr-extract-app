@@ -147,6 +147,10 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
 .file-item .status.fail{color:var(--red)}
 .file-item .status.pending{color:var(--text-3)}
 .file-item .status.active{color:var(--cyan)}
+.file-item .del-pdf{background:none;border:none;color:var(--text-3);cursor:pointer;font-size:13px;padding:2px 5px;border-radius:4px;line-height:1;flex-shrink:0;transition:.15s}
+.file-item .del-pdf:hover{color:var(--red);background:var(--red-bg)}
+.pdf-cap-warn{font-size:12px;color:var(--amber);margin-top:6px;display:none}
+.pdf-cap-warn.visible{display:block}
 
 .flex-end{display:flex;justify-content:flex-end}
 .mb-8{margin-bottom:8px}.mb-16{margin-bottom:16px}
@@ -286,6 +290,7 @@ textarea.input{resize:vertical;min-height:80px;font-family:'Courier New',monospa
       <input type="file" id="pdf-file-input" accept=".pdf" multiple style="display:none">
     </div>
     <div class="file-list" id="pdf-list" style="margin-top:12px"></div>
+    <div class="pdf-cap-warn" id="pdf-cap-warn">⚠️ Maximum 20 PDFs — remove extras before running extraction.</div>
   </div>
   
   <div class="card">
@@ -653,30 +658,44 @@ function setupPdfUpload(){
   drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag-over');addPdfFiles(e.dataTransfer.files)});
   inp.addEventListener('change',e=>{addPdfFiles(e.target.files);inp.value=''});
 }
+const MAX_PDFS = 20;
 function addPdfFiles(fileList){
   const existing=new Set(S.pdfFiles.map(f=>f.name));
-  let added=0;
+  let added=0, skipped=0;
   for(const f of fileList){
-    if(f.name.toLowerCase().endsWith('.pdf')&&!existing.has(f.name)){
-      S.pdfFiles.push(f);existing.add(f.name);added++;
-    }
+    if(!f.name.toLowerCase().endsWith('.pdf')) continue;
+    if(existing.has(f.name)) continue;
+    if(S.pdfFiles.length >= MAX_PDFS){ skipped++; continue; }
+    S.pdfFiles.push(f); existing.add(f.name); added++;
   }
   renderPdfList();
   updateDashboard();
-  if(added) toast(`Added ${added} PDF(s). Total: ${S.pdfFiles.length}`,'success');
+  if(added) toast(`Added ${added} PDF(s). Total: ${S.pdfFiles.length}${S.pdfFiles.length>=MAX_PDFS?' (max reached)':''}`,'success');
+  if(skipped) toast(`${skipped} file(s) skipped — max ${MAX_PDFS} PDFs allowed.`,'warning',5000);
 }
 function renderPdfList(){
   const el=document.getElementById('pdf-list');if(!el)return;
-  if(!S.pdfFiles.length){el.innerHTML='';return}
-  el.innerHTML=S.pdfFiles.map((f,i)=>{
+  const capWarn=document.getElementById('pdf-cap-warn');
+  if(!S.pdfFiles.length){el.innerHTML='';if(capWarn)capWarn.classList.remove('visible');return}
+  if(capWarn) capWarn.classList.toggle('visible', S.pdfFiles.length>=MAX_PDFS);
+  el.innerHTML='';
+  S.pdfFiles.forEach((f,i)=>{
     const sz=(f.size/1024).toFixed(0);
     const extracted=S.results.find(r=>r['Source File']===f.name);
     const failed=S.failures.find(r=>r.file===f.name);
     const isActive=S.activeFile===f.name;
     const st=extracted?'done':failed?'fail':isActive?'active':'pending';
     const stText=extracted?'✅ Done':failed?'❌ Failed':isActive?'🔄 Extracting…':'📎 Ready';
-    return `<div class="file-item"><span style="font-size:16px">📄</span><span class="name">${f.name}</span><span class="size">${sz} KB</span><span class="status ${st}">${stText}</span></div>`;
-  }).join('');
+    const div=document.createElement('div');div.className='file-item';
+    div.innerHTML=`<span style="font-size:16px">📄</span><span class="name">${escH(f.name)}</span><span class="size">${sz} KB</span><span class="status ${st}">${stText}</span>`;
+    if(!S.isRunning){
+      const btn=document.createElement('button');
+      btn.className='del-pdf';btn.title='Remove';btn.textContent='✕';
+      btn.addEventListener('click',()=>{ S.pdfFiles.splice(i,1); renderPdfList(); updateDashboard(); });
+      div.appendChild(btn);
+    }
+    el.appendChild(div);
+  });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -852,6 +871,7 @@ async function runExtraction(){
   if (!apiKeys) { toast('Enter your Gemini API key first.', 'error'); return; }
   if (!S.templateFields.length) { toast('Define extraction template first.', 'error'); switchTab('template'); return; }
   if (!S.pdfFiles.length) { toast('Upload PDF files first.', 'error'); return; }
+  if (S.pdfFiles.length > MAX_PDFS) { toast(`Remove extra PDFs first — max ${MAX_PDFS} allowed (currently ${S.pdfFiles.length}).`, 'error', 6000); return; }
 
   const model = document.getElementById('model-select')?.value || getModel();
 
@@ -868,10 +888,10 @@ async function runExtraction(){
   const runBtn = document.getElementById('run-btn');
   const abortBtn = document.getElementById('abort-btn');
   const pw = document.getElementById('progress-wrap');
-  if (runBtn) { runBtn.disabled = true; runBtn.innerHTML = '<div class="spinner"></div> Submitting…'; }
+  if (runBtn) { runBtn.disabled = true; runBtn.innerHTML = '<div class="spinner"></div> Uploading…'; }
   if (abortBtn) abortBtn.style.display = 'inline-flex';
   if (pw) pw.classList.add('visible');
-  updateProgress('Submitting job to backend…', 0, 'Starting…', '');
+  updateProgress('📤 Uploading PDFs to backend…', 2, `Sending ${S.pdfFiles.length} PDF(s) + template…`, '');
 
   try {
     const { job_id } = await window.SRApi.startJob({
@@ -883,7 +903,7 @@ async function runExtraction(){
     });
     S.currentJobId = job_id;
     if (runBtn) runBtn.innerHTML = '<div class="spinner"></div> Extracting…';
-    updateProgress('Job accepted', 5, `Job ${job_id.slice(0, 8)}…`, 'Polling status…');
+    updateProgress('✅ Uploaded — queued on backend', 5, `Job ${job_id.slice(0, 8)}… — waiting for worker`, '');
     await _pollUntilDone(job_id);
   } catch (e) {
     if (e && e.code === 'AbortError') {
@@ -932,13 +952,27 @@ async function _pollUntilDone(jobId) {
       }
 
       const p = snap.progress;
-      const pct = p.chunks_total > 0 ? Math.round((p.chunks_done / p.chunks_total) * 90) + 5 : 10;
-      updateProgress(
-        `${snap.status === 'running' ? '⚙️ Extracting' : '⏳ Queued'} — ${p.chunks_done}/${p.chunks_total} chunks`,
-        pct,
-        `Studies: ${p.studies_done}/${p.studies_total} done, ${p.studies_failed} failed`,
-        p.eta_seconds > 0 ? `ETA ~${p.eta_seconds}s` : ''
-      );
+      const pct = p.chunks_total > 0 ? Math.round((p.chunks_done / p.chunks_total) * 90) + 5 : 7;
+      // ── Phase-aware labels ────────────────────────────────
+      let progressLabel, statsLeft, statsRight;
+      if (snap.status === 'queued' || (snap.status === 'running' && p.chunks_total === 0)) {
+        const phaseMsg = snap.status === 'queued'
+          ? '⏳ Queued — waiting for worker to start…'
+          : '⚙️ Ingesting & chunking PDFs…';
+        progressLabel = phaseMsg;
+        statsLeft = 'Server is processing your files — this may take 30–60 s';
+        statsRight = '';
+      } else if (p.chunks_total > 0 && p.chunks_done === 0) {
+        progressLabel = `🔄 Worker ready — ${p.studies_total} stud${p.studies_total===1?'y':'ies'} queued`;
+        statsLeft = `Chunks: 0 / ${p.chunks_total}`;
+        statsRight = '';
+      } else {
+        const etaSuffix = p.eta_seconds > 0 ? `  ETA ~${p.eta_seconds}s` : '';
+        progressLabel = `⚙️ Extracting — ${p.studies_done} / ${p.studies_total} stud${p.studies_total===1?'y':'ies'} done`;
+        statsLeft = `Chunks: ${p.chunks_done} / ${p.chunks_total}${p.studies_failed > 0 ? `  ❌ ${p.studies_failed} failed` : ''}`;
+        statsRight = etaSuffix;
+      }
+      updateProgress(progressLabel, pct, statsLeft, statsRight);
       const etaEl = document.getElementById('st-eta'); if (etaEl) etaEl.textContent = p.eta_seconds > 0 ? `~${p.eta_seconds}s` : '—';
       const avgEl = document.getElementById('st-avg'); if (avgEl) avgEl.textContent = p.rate_per_min > 0 ? `${(60 / p.rate_per_min).toFixed(1)}s` : '—';
 
