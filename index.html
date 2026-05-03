@@ -814,14 +814,34 @@ async function _pollUntilDone(jobId) {
         statsLeft = `Chunks: 0 / ${p.chunks_total}`;
         statsRight = '';
       } else {
-        const etaSuffix = p.eta_seconds > 0 ? `  ETA ~${p.eta_seconds}s` : '';
+        const etaSuffix = p.eta_seconds > 0 ? `  ETA ~${_fmtTime(p.eta_seconds)}` : '';
         progressLabel = `⚙️ Extracting — ${p.studies_done} / ${p.studies_total} stud${p.studies_total===1?'y':'ies'} done`;
         statsLeft = `Chunks: ${p.chunks_done} / ${p.chunks_total}${p.studies_failed > 0 ? `  ❌ ${p.studies_failed} failed` : ''}`;
         statsRight = etaSuffix;
       }
       updateProgress(progressLabel, pct, statsLeft, statsRight);
-      const etaEl = document.getElementById('st-eta'); if (etaEl) etaEl.textContent = p.eta_seconds > 0 ? `~${p.eta_seconds}s` : '—';
+      const etaEl = document.getElementById('st-eta'); if (etaEl) etaEl.textContent = p.eta_seconds > 0 ? `~${_fmtTime(p.eta_seconds)}` : '—';
       const avgEl = document.getElementById('st-avg'); if (avgEl) avgEl.textContent = p.rate_per_min > 0 ? `${(60 / p.rate_per_min).toFixed(1)}s` : '—';
+
+      // ── Incremental results: show partial results as studies complete ──
+      if (p.studies_done > 0 && p.studies_done > (S._lastStudiesSeen || 0)) {
+        S._lastStudiesSeen = p.studies_done;
+        try {
+          const partialResp = await fetch(`${window.SRApi.API_BASE}/jobs/${jobId}/result`);
+          if (partialResp.ok) {
+            const partialBlob = await partialResp.blob();
+            const partialBuf = await partialBlob.arrayBuffer();
+            const partialWb = XLSX.read(partialBuf, { type: 'array' });
+            const partialWs = partialWb.Sheets[partialWb.SheetNames[0]];
+            const partialRows = XLSX.utils.sheet_to_json(partialWs);
+            if (partialRows.length > 0) {
+              S.results = partialRows;
+              autoSaveResults();
+              renderResults();
+            }
+          }
+        } catch (_) { /* partial result not available yet — ignore */ }
+      }
 
       if (snap.status === 'done') {
         updateProgress('✅ Done! Downloading…', 95, 'Downloading result…', '');
@@ -833,6 +853,7 @@ async function _pollUntilDone(jobId) {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws);
         S.results = rows;
+        S._lastStudiesSeen = 0; // reset tracker
         autoSaveResults();
         renderResults();
         switchTab('results');
@@ -861,6 +882,13 @@ async function _pollUntilDone(jobId) {
   } finally {
     clearInterval(statsTimer);
   }
+}
+
+/** Format seconds into human-readable "Xm Ys" or "Ys" string. */
+function _fmtTime(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
 function updateProgress(lbl,pct,status,detail){
